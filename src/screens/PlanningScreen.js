@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -12,40 +12,78 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Swipeable } from 'react-native-gesture-handler';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-/* ---------- Utils (replace these) ---------- */
+/* ---------- Utils ---------- */
+// Sanitize typing: remove spaces (incl. NBSP), keep digits and one dot/comma, convert comma->dot
 function sanitizeAmountText(t) {
-  // allow digits and one decimal; convert comma->dot; remove spaces and NBSP
   const noSpaces = String(t).replace(/\s|\u00A0/g, '');
-  const cleaned = noSpaces.replace(',', '.').replace(/[^0-9.]/g, '');
+  const commaToDot = noSpaces.replace(',', '.');
+  const cleaned = commaToDot.replace(/[^0-9.]/g, '');
   const parts = cleaned.split('.');
   return parts.length > 2 ? parts[0] + '.' + parts.slice(1).join('') : cleaned;
 }
 
+// Parse to number for math (handles spaces & comma decimal)
 function parseNum(v) {
   if (v == null) return 0;
-  // remove spaces (regular + NBSP) and convert comma to dot
   const s = String(v).replace(/\s|\u00A0/g, '').replace(',', '.');
   const n = parseFloat(s);
   return Number.isNaN(n) ? 0 : n;
+}
+
+// Format integer part with regular spaces; preserve optional decimals (max 2)
+function formatWithSpaces(numOrStr) {
+  if (numOrStr == null) return '0';
+  const raw =
+    typeof numOrStr === 'number'
+      ? String(numOrStr)
+      : String(numOrStr).replace(/\s|\u00A0/g, '').replace(',', '.');
+
+  const [intPartRaw, decPartRaw] = raw.split('.');
+  const isNeg = intPartRaw?.startsWith('-');
+  const intDigits = (isNeg ? intPartRaw.slice(1) : intPartRaw).replace(/\D/g, '') || '0';
+  const intWithSpaces = intDigits.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  const signedInt = (isNeg ? '-' : '') + intWithSpaces;
+
+  if (decPartRaw && decPartRaw.length > 0) {
+    const dec = decPartRaw.replace(/\D/g, '').slice(0, 2);
+    return dec.length ? `${signedInt}.${dec}` : signedInt;
+  }
+  return signedInt;
 }
 
 function sumItems(arr) {
   return arr.reduce((s, x) => s + parseNum(x.amount), 0);
 }
 
-// Format with space as thousand separator (no decimals)
-function formatKr(num) {
-  return num.toLocaleString('no-NO', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+function sortByAmountDesc(arr) {
+  return [...arr].sort((a, b) => parseNum(b.amount) - parseNum(a.amount));
 }
 
+function addMonths(date, delta) {
+  const d = new Date(date.getFullYear(), date.getMonth() + delta, 1);
+  return d;
+}
+
+function formatMonthYearText(date) {
+  return date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+}
 
 /* ---------- UI Subcomponents ---------- */
 const Card = ({ children }) => (
   <View className="bg-surface p-4 rounded-2xl mb-4">{children}</View>
 );
 
-const Section = ({ title, colorClass, items, onAddPress, onEditAmount, onDeleteItem }) => {
+const Section = ({
+  title,
+  colorClass,
+  items,
+  onAddPress,
+  onEditAmount,
+  onBlurAmount,
+  onDeleteItem,
+}) => {
   const total = sumItems(items);
 
   const renderRightActions = (idx) => (
@@ -76,10 +114,11 @@ const Section = ({ title, colorClass, items, onAddPress, onEditAmount, onDeleteI
               <TextInput
                 value={String(item.amount)}
                 onChangeText={(t) => onEditAmount(idx, sanitizeAmountText(t))}
+                onBlur={() => onBlurAmount(idx)} // format with spaces when leaving field
                 keyboardType="decimal-pad"
                 placeholder="0"
                 placeholderTextColor="#777"
-                className="bg-[#202020] text-textLight px-3 py-2 rounded-xl text-right min-w-[90px]"
+                className="bg-[#202020] text-textLight px-3 py-2 rounded-xl text-right min-w-[100px]"
                 returnKeyType="done"
               />
               <Text className="text-textLight/70 ml-2">kr</Text>
@@ -97,7 +136,7 @@ const Section = ({ title, colorClass, items, onAddPress, onEditAmount, onDeleteI
           </Text>
         </TouchableOpacity>
         <Text className={`${colorClass} font-bold`}>
-          Total: {formatKr(total)} kr
+          Total: {formatWithSpaces(total)} kr
         </Text>
       </View>
     </Card>
@@ -108,17 +147,85 @@ const Section = ({ title, colorClass, items, onAddPress, onEditAmount, onDeleteI
 export default function PlanningScreen() {
   const insets = useSafeAreaInsets();
 
-  const [income, setIncome] = useState([{ name: 'Salary', amount: '30 000' }]);
-  const [expenses, setExpenses] = useState([{ name: 'Rent', amount: '12 000' }]);
-  const [savings, setSavings] = useState([{ name: 'Emergency Fund', amount: '2000' }]);
+  // Month being viewed/edited
+  const [currentDate, setCurrentDate] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const currentMonthYear = formatMonthYearText(currentDate);
 
+  // Month key (e.g., 2025-03)
+  const monthKey = useMemo(() => {
+    const y = currentDate.getFullYear();
+    const m = String(currentDate.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+  }, [currentDate]);
+
+  // Data lists
+  const [income, setIncome] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [savings, setSavings] = useState([]);
+
+  // Draft modal
   const [modal, setModal] = useState({ open: false, section: null });
   const [draft, setDraft] = useState({ name: '', amount: '' });
 
-  const currentMonthYear = new Date().toLocaleString('en-US', {
-    month: 'long',
-    year: 'numeric',
-  });
+  // Prevent saving while (re)loading a month
+  const [isLoadingMonth, setIsLoadingMonth] = useState(true);
+
+  // Storage keys (per month)
+  const K = {
+    income: `budget.${monthKey}.income`,
+    expenses: `budget.${monthKey}.expenses`,
+    savings: `budget.${monthKey}.savings`,
+  };
+
+  // Load persisted data whenever the month changes
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setIsLoadingMonth(true);
+      try {
+        const [i, e, s] = await Promise.all([
+          AsyncStorage.getItem(K.income),
+          AsyncStorage.getItem(K.expenses),
+          AsyncStorage.getItem(K.savings),
+        ]);
+        if (cancelled) return;
+        setIncome(i ? sortByAmountDesc(JSON.parse(i)) : []);
+        setExpenses(e ? sortByAmountDesc(JSON.parse(e)) : []);
+        setSavings(s ? sortByAmountDesc(JSON.parse(s)) : []);
+      } catch (err) {
+        console.warn('Failed to load month data:', err);
+        if (!cancelled) {
+          setIncome([]);
+          setExpenses([]);
+          setSavings([]);
+        }
+      } finally {
+        if (!cancelled) setIsLoadingMonth(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [K.income, K.expenses, K.savings]);
+
+  // Auto-save when lists change (skip during initial month load)
+  useEffect(() => {
+    if (isLoadingMonth) return;
+    AsyncStorage.setItem(K.income, JSON.stringify(income)).catch(() => {});
+  }, [income, K.income, isLoadingMonth]);
+
+  useEffect(() => {
+    if (isLoadingMonth) return;
+    AsyncStorage.setItem(K.expenses, JSON.stringify(expenses)).catch(() => {});
+  }, [expenses, K.expenses, isLoadingMonth]);
+
+  useEffect(() => {
+    if (isLoadingMonth) return;
+    AsyncStorage.setItem(K.savings, JSON.stringify(savings)).catch(() => {});
+  }, [savings, K.savings, isLoadingMonth]);
 
   // Totals + Balance
   const incomeTotal = sumItems(income);
@@ -129,6 +236,10 @@ export default function PlanningScreen() {
   const balanceColor = afterExpenses >= 0 ? 'text-savings' : 'text-expenses';
   const leftoverColor = leftover >= 0 ? 'text-savings' : 'text-expenses';
 
+  // Month nav
+  const goPrevMonth = () => setCurrentDate((d) => addMonths(d, -1));
+  const goNextMonth = () => setCurrentDate((d) => addMonths(d, +1));
+
   // Actions
   const openAdd = (section) => {
     setDraft({ name: '', amount: '' });
@@ -136,20 +247,31 @@ export default function PlanningScreen() {
   };
 
   const addItem = () => {
+    const sanitized = sanitizeAmountText(draft.amount);
     const entry = {
       name: draft.name.trim() || 'Untitled',
-      amount: sanitizeAmountText(draft.amount) || '0',
+      amount: formatWithSpaces(sanitized), // store formatted so it looks right immediately
     };
-    if (modal.section === 'income') setIncome((x) => [...x, entry]);
-    if (modal.section === 'expenses') setExpenses((x) => [...x, entry]);
-    if (modal.section === 'savings') setSavings((x) => [...x, entry]);
+    if (modal.section === 'income') setIncome((x) => sortByAmountDesc([...x, entry]));
+    if (modal.section === 'expenses') setExpenses((x) => sortByAmountDesc([...x, entry]));
+    if (modal.section === 'savings') setSavings((x) => sortByAmountDesc([...x, entry]));
     setModal({ open: false, section: null });
   };
 
   const editAmountFactory = (section) => (idx, newVal) => {
-    if (section === 'income') setIncome((arr) => arr.map((it, i) => (i === idx ? { ...it, amount: newVal } : it)));
-    if (section === 'expenses') setExpenses((arr) => arr.map((it, i) => (i === idx ? { ...it, amount: newVal } : it)));
-    if (section === 'savings') setSavings((arr) => arr.map((it, i) => (i === idx ? { ...it, amount: newVal } : it)));
+    const update = (arr) =>
+      sortByAmountDesc(arr.map((it, i) => (i === idx ? { ...it, amount: newVal } : it)));
+    if (section === 'income') setIncome(update);
+    if (section === 'expenses') setExpenses(update);
+    if (section === 'savings') setSavings(update);
+  };
+
+  const blurAmountFactory = (section) => (idx) => {
+    const formatRow = (arr) =>
+      sortByAmountDesc(arr.map((it, i) => (i === idx ? { ...it, amount: formatWithSpaces(it.amount) } : it)));
+    if (section === 'income') setIncome(formatRow);
+    if (section === 'expenses') setExpenses(formatRow);
+    if (section === 'savings') setSavings(formatRow);
   };
 
   const deleteItemFactory = (section) => (idx) => {
@@ -163,9 +285,12 @@ export default function PlanningScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: () => {
-            if (section === 'income') setIncome((arr) => arr.filter((_, i) => i !== idx));
-            if (section === 'expenses') setExpenses((arr) => arr.filter((_, i) => i !== idx));
-            if (section === 'savings') setSavings((arr) => arr.filter((_, i) => i !== idx));
+            if (section === 'income')
+              setIncome((arr) => sortByAmountDesc(arr.filter((_, i) => i !== idx)));
+            if (section === 'expenses')
+              setExpenses((arr) => sortByAmountDesc(arr.filter((_, i) => i !== idx)));
+            if (section === 'savings')
+              setSavings((arr) => sortByAmountDesc(arr.filter((_, i) => i !== idx)));
           },
         },
       ],
@@ -184,9 +309,21 @@ export default function PlanningScreen() {
           keyboardShouldPersistTaps="handled"
           contentInsetAdjustmentBehavior="automatic"
         >
-          {/* Header */}
-          <Text className="text-textLight text-2xl font-extrabold mb-1">Planning</Text>
-          <Text className="text-textLight/70 text-lg mb-4">{currentMonthYear}</Text>
+          {/* Header with month switcher */}
+          <View className="flex-row items-center justify-between mb-2">
+            <TouchableOpacity onPress={goPrevMonth} className="px-2 py-1 rounded-xl bg-[#202020]">
+              <Text className="text-textLight text-xl">‹</Text>
+            </TouchableOpacity>
+
+            <View className="items-center">
+              <Text className="text-textLight text-2xl font-extrabold">Planning</Text>
+              <Text className="text-textLight/70 text-lg">{currentMonthYear}</Text>
+            </View>
+
+            <TouchableOpacity onPress={goNextMonth} className="px-2 py-1 rounded-xl bg-[#202020]">
+              <Text className="text-textLight text-xl">›</Text>
+            </TouchableOpacity>
+          </View>
 
           {/* Monthly Balance */}
           <View className="bg-surface p-4 rounded-2xl mb-4">
@@ -194,15 +331,15 @@ export default function PlanningScreen() {
 
             <View className="flex-row justify-between mb-1">
               <Text className="text-white/70">Income</Text>
-              <Text className="text-textLight">{formatKr(incomeTotal)} kr</Text>
+              <Text className="text-textLight">{formatWithSpaces(incomeTotal)} kr</Text>
             </View>
             <View className="flex-row justify-between mb-1">
               <Text className="text-white/70">Expenses</Text>
-              <Text className="text-textLight">{formatKr(expenseTotal)} kr</Text>
+              <Text className="text-textLight">{formatWithSpaces(expenseTotal)} kr</Text>
             </View>
             <View className="flex-row justify-between mb-3">
               <Text className="text-white/70">Savings</Text>
-              <Text className="text-textLight">{formatKr(savingsTotal)} kr</Text>
+              <Text className="text-textLight">{formatWithSpaces(savingsTotal)} kr</Text>
             </View>
 
             <View className="h-px bg-divider mb-3" />
@@ -210,13 +347,13 @@ export default function PlanningScreen() {
             <View className="flex-row justify-between mb-1">
               <Text className="text-white/90 font-semibold">After Expenses</Text>
               <Text className={`${balanceColor} font-bold`}>
-                {formatKr(afterExpenses)} kr
+                {formatWithSpaces(afterExpenses)} kr
               </Text>
             </View>
             <View className="flex-row justify-between">
               <Text className="text-white/90 font-semibold">Leftover (after Expenses & Savings)</Text>
               <Text className={`${leftoverColor} font-bold`}>
-                {formatKr(leftover)} kr
+                {formatWithSpaces(leftover)} kr
               </Text>
             </View>
           </View>
@@ -228,6 +365,7 @@ export default function PlanningScreen() {
             items={income}
             onAddPress={() => openAdd('income')}
             onEditAmount={editAmountFactory('income')}
+            onBlurAmount={blurAmountFactory('income')}
             onDeleteItem={deleteItemFactory('income')}
           />
           <Section
@@ -236,6 +374,7 @@ export default function PlanningScreen() {
             items={expenses}
             onAddPress={() => openAdd('expenses')}
             onEditAmount={editAmountFactory('expenses')}
+            onBlurAmount={blurAmountFactory('expenses')}
             onDeleteItem={deleteItemFactory('expenses')}
           />
           <Section
@@ -244,12 +383,9 @@ export default function PlanningScreen() {
             items={savings}
             onAddPress={() => openAdd('savings')}
             onEditAmount={editAmountFactory('savings')}
+            onBlurAmount={blurAmountFactory('savings')}
             onDeleteItem={deleteItemFactory('savings')}
           />
-
-          <TouchableOpacity className="bg-income p-4 rounded-2xl mt-2">
-            <Text className="text-white text-center font-bold">Save Budget</Text>
-          </TouchableOpacity>
         </ScrollView>
 
         {/* Add Item Modal */}
@@ -282,6 +418,7 @@ export default function PlanningScreen() {
                 <TextInput
                   value={draft.amount}
                   onChangeText={(t) => setDraft((d) => ({ ...d, amount: sanitizeAmountText(t) }))}
+                  onBlur={() => setDraft((d) => ({ ...d, amount: formatWithSpaces(d.amount) }))}
                   keyboardType="decimal-pad"
                   placeholder="e.g., 500"
                   placeholderTextColor="#777"
