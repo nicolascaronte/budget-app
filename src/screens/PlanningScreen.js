@@ -13,22 +13,32 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Swipeable } from 'react-native-gesture-handler';
 
-/* ---------- Utils ---------- */
+/* ---------- Utils (replace these) ---------- */
 function sanitizeAmountText(t) {
-  const cleaned = t.replace(',', '.').replace(/[^0-9.]/g, '');
+  // allow digits and one decimal; convert comma->dot; remove spaces and NBSP
+  const noSpaces = String(t).replace(/\s|\u00A0/g, '');
+  const cleaned = noSpaces.replace(',', '.').replace(/[^0-9.]/g, '');
   const parts = cleaned.split('.');
   return parts.length > 2 ? parts[0] + '.' + parts.slice(1).join('') : cleaned;
 }
+
 function parseNum(v) {
-  return parseFloat(String(v).replace(',', '.')) || 0;
+  if (v == null) return 0;
+  // remove spaces (regular + NBSP) and convert comma to dot
+  const s = String(v).replace(/\s|\u00A0/g, '').replace(',', '.');
+  const n = parseFloat(s);
+  return Number.isNaN(n) ? 0 : n;
 }
+
 function sumItems(arr) {
   return arr.reduce((s, x) => s + parseNum(x.amount), 0);
 }
+
 // Format with space as thousand separator (no decimals)
 function formatKr(num) {
   return num.toLocaleString('no-NO', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
+
 
 /* ---------- UI Subcomponents ---------- */
 const Card = ({ children }) => (
@@ -100,7 +110,7 @@ export default function PlanningScreen() {
 
   const [income, setIncome] = useState([{ name: 'Salary', amount: '30 000' }]);
   const [expenses, setExpenses] = useState([{ name: 'Rent', amount: '12 000' }]);
-  const [savings, setSavings] = useState([{ name: 'Emergency Fund', amount: '2 000' }]);
+  const [savings, setSavings] = useState([{ name: 'Emergency Fund', amount: '2000' }]);
 
   const [modal, setModal] = useState({ open: false, section: null });
   const [draft, setDraft] = useState({ name: '', amount: '' });
