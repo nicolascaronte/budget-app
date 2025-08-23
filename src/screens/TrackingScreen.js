@@ -244,10 +244,10 @@ export default function TrackingScreen() {
   return (
     <View 
       className="flex-1 bg-backgroundDark"
-      style={{ paddingTop: insets.top + 8, paddingBottom: 70 + insets.bottom }}
+      style={{ paddingTop: insets.top + 8 }}
     >
       <ScrollView 
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 70 + insets.bottom + 20 }}
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
