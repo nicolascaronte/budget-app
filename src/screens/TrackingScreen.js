@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { extractTextFromImage, mockOCRService } from '../services/ocrService';
+import { testParsingWithKnownData } from '../services/universalBankParser';
 
 /* ---------- Smart Categorization ---------- */
 // This will learn from user choices over time
@@ -238,6 +239,33 @@ export default function TrackingScreen() {
     }
   };
   
+  const testParser = async () => {
+    setIsProcessing(true);
+    try {
+      console.log('🧪 Testing parser with known data from your bank statement...');
+      const transactions = testParsingWithKnownData();
+      
+      // Add suggested categories based on learning data
+      const transactionsWithSuggestions = transactions.map(transaction => ({
+        ...transaction,
+        suggestedCategory: suggestCategory(
+          transaction.merchant, 
+          transaction.amount, 
+          transaction.type, 
+          learningData
+        ),
+        id: transaction.id || Date.now() + Math.random(), // Ensure ID exists
+      }));
+      
+      setExtractedTransactions(transactionsWithSuggestions);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to test parser.');
+      console.error('Parser test error:', error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+  
   const handleCategoryChange = (transaction, newCategory) => {
     // Update the transaction
     setExtractedTransactions(prev => 
@@ -315,6 +343,16 @@ export default function TrackingScreen() {
               disabled={isProcessing}
             >
               <Text className="text-textLight/70 font-semibold text-sm">🧪 Test with Mock Data</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              onPress={testParser}
+              className={`p-3 rounded-xl border-2 border-dashed border-yellow-500/50 flex-row items-center justify-center ${
+                isProcessing ? 'opacity-50' : ''
+              }`}
+              disabled={isProcessing}
+            >
+              <Text className="text-yellow-400 font-semibold text-sm">🔍 Debug Parser</Text>
             </TouchableOpacity>
           </View>
           

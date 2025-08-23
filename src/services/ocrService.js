@@ -100,7 +100,18 @@ async function extractWithGoogleVision(imageUri) {
       
       if (response_data.textAnnotations && response_data.textAnnotations.length > 0) {
         const extractedText = response_data.textAnnotations[0].description;
-        console.log('📄 Google Vision extracted text:', extractedText);
+        console.log('📄 Google Vision extracted text:');
+        console.log('====== RAW OCR OUTPUT ======');
+        console.log(extractedText);
+        console.log('====== END OCR OUTPUT ======');
+        
+        // Show each line with index for debugging
+        const lines = extractedText.split('\n');
+        console.log('📝 OCR Lines breakdown:');
+        lines.forEach((line, i) => {
+          console.log(`Line ${i}: "${line}"`);
+        });
+        
         return parseUniversalBankStatement(extractedText);
       } else {
         console.log('⚠️ No text annotations found in Google Vision response');
