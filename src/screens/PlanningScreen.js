@@ -301,7 +301,7 @@ export default function PlanningScreen() {
   return (
     <View
       className="flex-1 bg-backgroundDark"
-      style={{ paddingTop: insets.top + 8, paddingBottom: insets.bottom }}
+      style={{ paddingTop: insets.top + 8, paddingBottom: 70 + insets.bottom }}
     >
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1">
         <ScrollView

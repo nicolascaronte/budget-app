@@ -1,8 +1,8 @@
 /* ============================================================
-   SUBTLE MODERN #5: SOFT GRADIENT
+   ORIGINAL THEME: SOFT GRADIENT (Your Current Theme)
    Inspired by subtle gradients, very easy on eyes
-   ============================================================
-/** @type {import'tailwindcss').Config} */
+   ============================================================ */
+/** @type {import('tailwindcss').Config} */
 module.exports = {
   content: ["./App.{js,jsx,ts,tsx}", "./src/**/*.{js,jsx,ts,tsx}"],
   presets: [require("nativewind/preset")],
