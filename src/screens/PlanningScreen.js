@@ -325,6 +325,35 @@ export default function PlanningScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* Sections */}
+          <Section
+            title="Income"
+            colorClass="text-income"
+            items={income}
+            onAddPress={() => openAdd('income')}
+            onEditAmount={editAmountFactory('income')}
+            onBlurAmount={blurAmountFactory('income')}
+            onDeleteItem={deleteItemFactory('income')}
+          />
+          <Section
+            title="Expenses"
+            colorClass="text-expenses"
+            items={expenses}
+            onAddPress={() => openAdd('expenses')}
+            onEditAmount={editAmountFactory('expenses')}
+            onBlurAmount={blurAmountFactory('expenses')}
+            onDeleteItem={deleteItemFactory('expenses')}
+          />
+          <Section
+            title="Savings"
+            colorClass="text-savings"
+            items={savings}
+            onAddPress={() => openAdd('savings')}
+            onEditAmount={editAmountFactory('savings')}
+            onBlurAmount={blurAmountFactory('savings')}
+            onDeleteItem={deleteItemFactory('savings')}
+          />
+
           {/* Monthly Balance */}
           <View className="bg-surface p-4 rounded-2xl mb-4">
             <Text className="text-textLight text-base font-semibold mb-3">Monthly Balance</Text>
@@ -357,35 +386,6 @@ export default function PlanningScreen() {
               </Text>
             </View>
           </View>
-
-          {/* Sections */}
-          <Section
-            title="Income"
-            colorClass="text-income"
-            items={income}
-            onAddPress={() => openAdd('income')}
-            onEditAmount={editAmountFactory('income')}
-            onBlurAmount={blurAmountFactory('income')}
-            onDeleteItem={deleteItemFactory('income')}
-          />
-          <Section
-            title="Expenses"
-            colorClass="text-expenses"
-            items={expenses}
-            onAddPress={() => openAdd('expenses')}
-            onEditAmount={editAmountFactory('expenses')}
-            onBlurAmount={blurAmountFactory('expenses')}
-            onDeleteItem={deleteItemFactory('expenses')}
-          />
-          <Section
-            title="Savings"
-            colorClass="text-savings"
-            items={savings}
-            onAddPress={() => openAdd('savings')}
-            onEditAmount={editAmountFactory('savings')}
-            onBlurAmount={blurAmountFactory('savings')}
-            onDeleteItem={deleteItemFactory('savings')}
-          />
         </ScrollView>
 
         {/* Add Item Modal */}
