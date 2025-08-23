@@ -179,17 +179,9 @@ export default function TrackingScreen() {
   const processImage = async (imageUri) => {
     setIsProcessing(true);
     try {
-      let transactions;
-      
-      try {
-        // Try real OCR first
-        transactions = await extractTextFromImage(imageUri);
-        console.log('✅ Real OCR successful');
-      } catch (ocrError) {
-        console.log('⚠️ Real OCR failed, using mock data:', ocrError.message);
-        // Fallback to mock OCR if real OCR fails (no API key, network issues, etc.)
-        transactions = await mockOCRService(imageUri);
-      }
+      // Extract text using Google Vision API
+      const transactions = await extractTextFromImage(imageUri);
+      console.log('✅ Google Vision OCR successful');
       
       // Add suggested categories based on learning data
       const transactionsWithSuggestions = transactions.map(transaction => ({
@@ -205,8 +197,42 @@ export default function TrackingScreen() {
       
       setExtractedTransactions(transactionsWithSuggestions);
     } catch (error) {
-      Alert.alert('Error', 'Failed to process the image. Please try again.');
-      console.error('Image processing error:', error);
+      console.error('Google Vision processing error:', error);
+      Alert.alert(
+        'Processing Failed', 
+        error.message || 'Failed to process the image. Please check your Google Vision API setup.',
+        [
+          { text: 'Try Mock Data', onPress: () => useMockData() },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+  
+  const useMockData = async () => {
+    setIsProcessing(true);
+    try {
+      console.log('📋 Using mock data for testing...');
+      const transactions = await mockOCRService('mock-image');
+      
+      // Add suggested categories based on learning data
+      const transactionsWithSuggestions = transactions.map(transaction => ({
+        ...transaction,
+        suggestedCategory: suggestCategory(
+          transaction.merchant, 
+          transaction.amount, 
+          transaction.type, 
+          learningData
+        ),
+        id: transaction.id || Date.now() + Math.random(), // Ensure ID exists
+      }));
+      
+      setExtractedTransactions(transactionsWithSuggestions);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to load mock data.');
+      console.error('Mock data error:', error);
     } finally {
       setIsProcessing(false);
     }
@@ -280,19 +306,29 @@ export default function TrackingScreen() {
             >
               <Text className="text-white font-bold text-base">📁 Choose from Gallery</Text>
             </TouchableOpacity>
+            
+            <TouchableOpacity 
+              onPress={useMockData}
+              className={`p-3 rounded-xl border-2 border-dashed border-textLight/30 flex-row items-center justify-center ${
+                isProcessing ? 'opacity-50' : ''
+              }`}
+              disabled={isProcessing}
+            >
+              <Text className="text-textLight/70 font-semibold text-sm">🧪 Test with Mock Data</Text>
+            </TouchableOpacity>
           </View>
           
           {isProcessing && (
             <View className="mt-4 items-center">
               <ActivityIndicator size="large" color="#64B5F6" />
-              <Text className="text-textLight/70 mt-2">🤖 AI Reading Your Statement...</Text>
-              <Text className="text-textLight/50 text-sm">Extracting transactions and amounts</Text>
+              <Text className="text-textLight/70 mt-2">🤖 Google Vision Reading Your Statement...</Text>
+              <Text className="text-textLight/50 text-sm">Extracting transactions and amounts with AI</Text>
               <View className="mt-2 bg-[#202020] p-2 rounded-lg">
                 <Text className="text-textLight/40 text-xs text-center">
-                  Check console logs for detailed processing info
+                  Using Google Vision API for accurate text recognition
                 </Text>
                 <Text className="text-textLight/40 text-xs text-center">
-                  Processing time: 10-30 seconds
+                  Processing time: 5-15 seconds
                 </Text>
               </View>
             </View>
@@ -335,8 +371,9 @@ export default function TrackingScreen() {
           <View className="space-y-2">
             <Text className="text-textLight/70">• Take clear photos with good lighting</Text>
             <Text className="text-textLight/70">• Ensure all text is visible and not blurred</Text>
+            <Text className="text-textLight/70">• Google Vision API provides the most accurate results</Text>
             <Text className="text-textLight/70">• The app learns from your category choices</Text>
-            <Text className="text-textLight/70">• Upload recent bank statements for accuracy</Text>
+            <Text className="text-textLight/70">• Use mock data for testing without API setup</Text>
           </View>
         </Card>
         

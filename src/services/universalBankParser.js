@@ -4,12 +4,12 @@
    ============================================================ */
 
 /**
- * Parse transactions from any bank statement text
+ * Ultra-simple sequential parser - process transactions in order
  * @param {string} text - Raw OCR text
  * @returns {Array} - Parsed transactions
  */
 export function parseUniversalBankStatement(text) {
-  console.log('🌍 Universal bank parser starting...');
+  console.log('🎯 Ultra-simple sequential parser starting...');
   console.log('📄 Raw text:', text);
   
   const lines = text.split('\n').filter(line => line.trim().length > 0);
@@ -17,190 +17,406 @@ export function parseUniversalBankStatement(text) {
   
   console.log(`📝 Processing ${lines.length} lines...`);
   
-  // Strategy: Find all amounts first, then find their merchants
-  const amountLines = [];
+  // Step 1: Collect all merchants and amounts
+  const merchants = [];
+  const amounts = [];
   
-  // Step 1: Find all lines with amounts
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    const amounts = findAmountsInLine(line, i);
-    amountLines.push(...amounts);
+    
+    // Collect merchant descriptor lines
+    if (isMerchantDescriptor(line)) {
+      const merchantInfo = parseMerchantDescriptor(line);
+      
+      // Check if the next line might be a more specific merchant name OR another descriptor
+      let finalMerchant = merchantInfo.merchant;
+      let skipNextLine = false;
+      
+      if (i + 1 < lines.length) {
+        const nextLine = lines[i + 1].trim();
+        
+        // Check if next line is "Til: ActualMerchant" or "Fra: ActualMerchant"
+        if (nextLine.startsWith('Til: ') || nextLine.startsWith('Fra: ')) {
+          const actualMerchant = nextLine.substring(5).trim(); // Remove "Til: " or "Fra: "
+          if (actualMerchant && !actualMerchant.match(/^\d+/)) { // Not just numbers
+            finalMerchant = actualMerchant;
+            skipNextLine = true; // Don't process this line again
+            console.log(`🔄 Using actual merchant from next line: ${actualMerchant}`);
+          }
+        } else if (isSpecificMerchantName(nextLine)) {
+          finalMerchant = nextLine;
+        }
+      }
+      
+      merchants.push({
+        ...merchantInfo,
+        merchant: finalMerchant,
+        lineIndex: i
+      });
+      console.log(`🏪 Found merchant: ${merchantInfo.date} ${merchantInfo.direction}: ${finalMerchant}`);
+      
+      // Skip the next line if we used it as merchant name
+      if (skipNextLine) {
+        i++; // Skip next iteration
+      }
+    }
+    
+    // Collect amount lines
+    if (isTransactionAmountOnly(line)) {
+      const amount = parseAmount(line);
+      const isNegative = line.startsWith('-');
+      amounts.push({
+        amount,
+        isNegative,
+        line,
+        lineIndex: i,
+        used: false
+      });
+      console.log(`💰 Found amount: ${line} -> ${amount} kr (${isNegative ? 'negative' : 'positive'})`);
+    }
   }
   
-  console.log(`💰 Found ${amountLines.length} potential amounts`);
+  console.log(`Found ${merchants.length} merchants and ${amounts.length} amounts`);
   
-  // Step 2: For each amount, find the best merchant match
-  for (const amountInfo of amountLines) {
-    const merchant = findMerchantForAmount(lines, amountInfo);
+  // Step 2: Match merchants with amounts (simplified approach)
+  for (const merchantInfo of merchants) {
+    console.log(`\n🎯 Matching merchant: ${merchantInfo.date} ${merchantInfo.direction}: ${merchantInfo.merchant}`);
     
-    if (merchant) {
-      const cleanMerchant = cleanMerchantName(merchant);
-      
-      if (cleanMerchant.length > 1) {
-        const type = determineTransactionType(cleanMerchant, amountInfo.amount);
+    let foundAmount = null;
+    
+    if (merchantInfo.direction === 'Til') {
+      // EXPENSES: Find first unused negative amount (same as before - works perfectly)
+      for (const amountInfo of amounts) {
+        if (amountInfo.used || !amountInfo.isNegative) continue;
         
-        transactions.push({
-          text: `${merchant} ${amountInfo.amount}`,
-          merchant: cleanMerchant,
-          amount: amountInfo.amount,
-          type: type,
-          id: Date.now() + Math.random() + amountInfo.lineIndex,
-        });
-        
-        console.log(`✅ SUCCESS: ${cleanMerchant} - ${amountInfo.amount} kr (${type})`);
+        foundAmount = amountInfo;
+        console.log(`  💰 Found expense amount: ${amountInfo.line} -> ${amountInfo.amount} kr`);
+        break;
       }
+    } else {
+      // INCOME: Find first unused positive amount that looks like a transaction (not a balance)
+      const searchRange = 15; // Look within reasonable distance
+      
+      for (let j = merchantInfo.lineIndex + 1; j <= Math.min(amounts.length - 1, merchantInfo.lineIndex + searchRange); j++) {
+        const candidateAmount = amounts.find(a => a.lineIndex === j && !a.used && !a.isNegative);
+        if (!candidateAmount) continue;
+        
+        console.log(`  💰 Evaluating income amount: ${candidateAmount.line} (${candidateAmount.amount} kr)`);
+        
+        // Simple filters to avoid obvious balances
+        let isLikelyTransaction = true;
+        
+        // Skip very large amounts (likely balances)
+        if (candidateAmount.amount > 50000) {
+          console.log(`    ❌ Too large (likely balance): ${candidateAmount.amount} kr`);
+          isLikelyTransaction = false;
+        }
+        
+        // Skip amounts that are followed immediately by a larger amount (balance pattern)
+        const nextAmount = amounts.find(a => a.lineIndex === j + 1 && !a.isNegative);
+        if (nextAmount && nextAmount.amount > candidateAmount.amount * 1.1) {
+          console.log(`    ❌ Followed by larger amount (likely balance): ${nextAmount.line}`);
+          isLikelyTransaction = false;
+        }
+        
+        if (isLikelyTransaction) {
+          foundAmount = candidateAmount;
+          console.log(`    ✅ Looks like transaction amount!`);
+          break;
+        }
+      }
+      
+      // If no good candidate found nearby, take first unused positive amount
+      if (!foundAmount) {
+        for (const amountInfo of amounts) {
+          if (amountInfo.used || amountInfo.isNegative) continue;
+          foundAmount = amountInfo;
+          console.log(`  💰 Fallback to first positive amount: ${amountInfo.line} -> ${amountInfo.amount} kr`);
+          break;
+        }
+      }
+    }
+    
+    if (foundAmount) {
+      // Mark amount as used
+      foundAmount.used = true;
+      
+      const cleanMerchant = cleanMerchantName(merchantInfo.merchant);
+      const type = determineTypeFromDirection(merchantInfo.direction, cleanMerchant, foundAmount.amount);
+      
+      transactions.push({
+        text: `${merchantInfo.date} ${cleanMerchant} - ${foundAmount.amount} kr`,
+        merchant: cleanMerchant,
+        amount: foundAmount.amount,
+        type: type,
+        date: merchantInfo.date,
+        id: Date.now() + Math.random() + merchantInfo.lineIndex,
+      });
+      
+      console.log(`✅ MATCHED: ${merchantInfo.date} ${cleanMerchant} - ${foundAmount.amount} kr (${type})`);
+    } else {
+      console.log(`❌ No compatible amount found for: ${merchantInfo.merchant}`);
     }
   }
   
   console.log(`🎯 Final result: ${transactions.length} transactions`);
   
-  // Remove duplicates and sort
-  return removeDuplicates(transactions).sort((a, b) => b.amount - a.amount);
+  // Sort without removing duplicates (user wants true duplicates to appear)
+  return transactions.sort((a, b) => b.amount - a.amount);
 }
 
 /**
- * Find all amounts in a line
+ * Check if a line is a merchant descriptor
  */
-function findAmountsInLine(line, lineIndex) {
-  const amounts = [];
-  
-  // Multiple patterns for different formats
-  const patterns = [
-    // Norwegian: -274,71 or -4 349,00
-    /[\-\+]?\s*\d{1,3}(?:\s\d{3})*[,]\d{1,2}/g,
-    // International: -274.71 or -4,349.00  
-    /[\-\+]?\s*\d{1,3}(?:,\d{3})*[\.]\d{1,2}/g,
-    // Simple: -274 or 274
-    /[\-\+]?\s*\d{1,6}/g,
-  ];
-  
-  for (const pattern of patterns) {
-    const matches = [...line.matchAll(pattern)];
-    for (const match of matches) {
-      const amountStr = match[0];
-      const amount = parseUniversalAmount(amountStr);
-      
-      if (amount >= 0.01) {
-        amounts.push({
-          amount: amount,
-          originalStr: amountStr,
-          lineIndex: lineIndex,
-          line: line
-        });
-        console.log(`💵 Found amount in line ${lineIndex}: ${amountStr} -> ${amount}`);
-      }
-    }
-  }
-  
-  return amounts;
+function isMerchantDescriptor(line) {
+  // Look for Norwegian transaction patterns: "DD.MM Til: MERCHANT" or "DD.MM Fra: MERCHANT"
+  return /^\d{1,2}\.\d{1,2}\s+(Til|Fra):\s*(.+)$/.test(line);
 }
 
 /**
- * Find merchant name for an amount
+ * Parse merchant descriptor line
  */
-function findMerchantForAmount(lines, amountInfo) {
-  const { lineIndex } = amountInfo;
-  
-  // Look in nearby lines for merchant names
-  for (let distance = 1; distance <= 3; distance++) {
-    // Check lines before the amount
-    const checkIndex = lineIndex - distance;
-    if (checkIndex >= 0) {
-      const line = lines[checkIndex]?.trim();
-      if (line && isPossibleMerchant(line)) {
-        console.log(`🏪 Found merchant ${distance} lines back: "${line}"`);
-        return line;
-      }
-    }
+function parseMerchantDescriptor(line) {
+  const match = line.match(/^(\d{1,2}\.\d{1,2})\s+(Til|Fra):\s*(.+)$/);
+  if (match) {
+    const [, date, direction, merchant] = match;
+    return { date, direction, merchant };
   }
-  
-  // Also check if amount is on same line as merchant
-  const sameLine = amountInfo.line;
-  const withoutAmount = sameLine.replace(amountInfo.originalStr, '').trim();
-  if (withoutAmount.length > 3 && isPossibleMerchant(withoutAmount)) {
-    console.log(`🏪 Found merchant on same line: "${withoutAmount}"`);
-    return withoutAmount;
-  }
-  
-  console.log(`❌ No merchant found for amount ${amountInfo.amount}`);
   return null;
 }
 
 /**
- * Check if a line could be a merchant name
+ * Check if a line is a specific merchant name (like "Marco Caronte")
  */
-function isPossibleMerchant(line) {
-  // Skip date lines
-  if (/\b(mandag|tirsdag|onsdag|torsdag|fredag|lørdag|søndag|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(line)) {
-    return false;
+function isSpecificMerchantName(line) {
+  const trimmed = line.trim();
+  
+  // Skip if it's an amount, account number, or already used
+  // (Removed USED_AMOUNT check to allow duplicate transactions)
+  if (isTransactionAmountOnly(trimmed)) return false;
+  if (/^\d+/.test(trimmed)) return false; // Starts with numbers (likely account)
+  if (trimmed.startsWith('Til:') || trimmed.startsWith('Fra:')) return false; // Already a descriptor
+  
+  // Must contain letters and be reasonable length
+  if (/[a-zA-ZæøåÆØÅ]/.test(trimmed) && trimmed.length > 3 && trimmed.length < 50) {
+    return true;
   }
   
-  // Skip pure date lines
-  if (/^\d{1,2}[\.\/\-]\d{1,2}[\.\/\-]\d{2,4}$/.test(line)) {
-    return false;
-  }
-  
-  // Skip lines that are just amounts
-  if (/^[\-\+]?\s*\d+[\s,\.]*\d*$/.test(line)) {
-    return false;
-  }
-  
-  // Skip very short lines
-  if (line.length < 3) {
-    return false;
-  }
-  
-  // Skip common bank statement headers
-  const skipWords = ['saldo', 'balance', 'total', 'sum', 'reservert', 'pending'];
-  if (skipWords.some(word => line.toLowerCase().includes(word))) {
-    return false;
-  }
-  
-  return true;
+  return false;
 }
 
 /**
- * Parse amount from any format
+ * Check if a line is ONLY a transaction amount (nothing else)
  */
-function parseUniversalAmount(amountStr) {
+function isTransactionAmountOnly(line) {
+  const trimmed = line.trim();
+  
+  // Skip if already used
+  // (Removed USED_AMOUNT check to allow duplicate transactions)
+  
+  // Must be EXACTLY an amount, nothing else
+  // Negative amounts (expenses)
+  if (/^-\d{1,3}(?:\s\d{3})*,\d{2}$/.test(trimmed)) return true; // -75 000,00
+  if (/^-\d{1,4},\d{2}$/.test(trimmed)) return true; // -599,00
+  
+  // Positive amounts (income) - but be more selective
+  if (/^\d{1,3}(?:\s\d{3})*,\d{2}$/.test(trimmed) || /^\d{1,4},\d{2}$/.test(trimmed)) {
+    const amount = parseAmount(trimmed);
+    // Only reasonable transaction amounts, exclude obvious balances
+    return amount >= 10 && amount < 200000;
+  }
+  
+  return false;
+}
+
+/**
+ * Find the closest amount to a merchant line
+ */
+function findClosestAmount(merchantInfo, amountLines) {
+  let bestMatch = null;
+  let bestDistance = Infinity;
+  
+  for (const amountInfo of amountLines) {
+    const distance = Math.abs(amountInfo.index - merchantInfo.index);
+    
+    // Prefer amounts that come after the merchant (typical bank statement order)
+    const penalty = amountInfo.index < merchantInfo.index ? 2 : 0;
+    const adjustedDistance = distance + penalty;
+    
+    if (adjustedDistance < bestDistance) {
+      bestDistance = adjustedDistance;
+      bestMatch = amountInfo;
+    }
+  }
+  
+  console.log(`  🔗 Best amount for ${merchantInfo.merchant}: ${bestMatch?.amount} kr (distance: ${bestDistance})`);
+  return bestMatch;
+}
+
+/**
+ * Determine type from direction
+ */
+function determineTypeFromDirection(direction, merchant, amount) {
+  const merchantLower = merchant.toLowerCase();
+  
+  // Fra = incoming = income
+  if (direction === 'Fra') return 'income';
+  
+  // Til = outgoing - check if savings or expense
+  if (direction === 'Til') {
+    const savingsKeywords = ['investering', 'investment', 'sparing', 'savings', 'pension', 'fond', 'betalt'];
+    if (savingsKeywords.some(keyword => merchantLower.includes(keyword))) {
+      return 'savings';
+    }
+    return 'expense';
+  }
+  
+  return 'expense';
+}
+
+/**
+ * Find merchant info by looking backwards from amount (improved)
+ */
+function findMerchantBackwards(lines, amountLineIndex) {
+  console.log(`🔍 Looking backwards from line ${amountLineIndex} for merchant`);
+  
+  let bestMatch = null;
+  let bestScore = 0;
+  
+  // Check the previous 1-5 lines (expanded range)
+  for (let i = amountLineIndex - 1; i >= Math.max(0, amountLineIndex - 5); i--) {
+    const line = lines[i].trim();
+    console.log(`  Checking line ${i}: "${line}"`);
+    
+    // Skip lines that are obviously not merchant info
+    if (isObviouslyNotMerchant(line)) {
+      console.log(`    ⏭️ Skipping: not merchant info`);
+      continue;
+    }
+    
+    let match = null;
+    let score = 0;
+    
+    // Pattern 1: "DD.MM Til: MERCHANT" or "DD.MM Fra: MERCHANT" (highest priority)
+    const fullMatch = line.match(/^(\d{1,2}\.\d{1,2})\s+(Til|Fra):\s*(.+)$/);
+    if (fullMatch) {
+      const [, date, direction, merchant] = fullMatch;
+      match = { date, direction, merchant };
+      score = 10; // Highest score
+      console.log(`    🎯 Full transaction pattern: ${date} ${direction}: ${merchant} (score: ${score})`);
+    }
+    
+    // Pattern 2: Just "Til: MERCHANT" or "Fra: MERCHANT" (medium priority)
+    else {
+      const directionMatch = line.match(/^(Til|Fra):\s*(.+)$/);
+      if (directionMatch) {
+        const [, direction, merchant] = directionMatch;
+        match = { date: null, direction, merchant };
+        score = 8; // High score
+        console.log(`    🎯 Direction + merchant: ${direction}: ${merchant} (score: ${score})`);
+      }
+    }
+    
+    // Adjust score based on distance (closer is better)
+    const distance = amountLineIndex - i;
+    score -= distance * 0.5; // Small penalty for distance
+    
+    if (match && score > bestScore) {
+      bestScore = score;
+      bestMatch = match;
+      console.log(`    ✨ New best match with score ${score}`);
+    }
+  }
+  
+  if (bestMatch) {
+    console.log(`  ✅ Best merchant found: ${bestMatch.direction}: ${bestMatch.merchant} (score: ${bestScore})`);
+    return bestMatch;
+  }
+  
+  console.log(`  ❌ No merchant found`);
+  return null;
+}
+
+/**
+ * Check if a line is obviously not merchant info
+ */
+function isObviouslyNotMerchant(line) {
+  // Very long numbers (account numbers, reference numbers)
+  if (/^\d{10,}$/.test(line)) return true;
+  
+  // Account number patterns
+  if (/^\d{4}[\.\s]\d{2}[\.\s]\d{5,}$/.test(line)) return true;
+  
+  // Large balance amounts (we already found these as transaction amounts)
+  if (/^\d{6,},\d{2}$/.test(line)) return true;
+  
+  // Very short lines
+  if (line.length < 3) return true;
+  
+    return false;
+  }
+  
+/**
+ * Determine transaction type based on direction, merchant, and amount
+ */
+function determineType(merchant, direction, amount, originalAmount) {
+  const merchantLower = merchant.toLowerCase();
+  
+  // Fra = incoming = income
+  if (direction === 'Fra') return 'income';
+  
+  // Til = outgoing - check if savings or expense
+  if (direction === 'Til') {
+    const savingsKeywords = ['investering', 'investment', 'sparing', 'savings', 'pension', 'fond', 'betalt'];
+    if (savingsKeywords.some(keyword => merchantLower.includes(keyword))) {
+      return 'savings';
+    }
+    return 'expense';
+  }
+  
+  // If no direction found, use amount and keywords to guess
+  // Positive amounts are often income
+  if (originalAmount && !originalAmount.startsWith('-')) {
+    const incomeKeywords = ['aas-jakobsen', 'salary', 'lønn', 'wage', 'employer', 'company', 'refund'];
+    if (incomeKeywords.some(keyword => merchantLower.includes(keyword))) {
+      return 'income';
+    }
+    // Large positive amounts are likely income
+    if (amount > 5000) {
+      return 'income';
+    }
+  }
+  
+  // Fallback
+  return 'expense';
+}
+
+// Removed complex functions - keeping it simple
+
+/**
+ * Parse amount from various formats
+ */
+function parseAmount(amountStr) {
   if (!amountStr) return 0;
   
   let cleaned = String(amountStr).trim();
   
   // Remove currency symbols
-  cleaned = cleaned.replace(/kr|nok|øre|\$|€|£/gi, '').trim();
+  cleaned = cleaned.replace(/kr|nok|øre/gi, '').trim();
   
-  // Remove leading/trailing spaces and signs for processing
-  const isNegative = cleaned.startsWith('-');
-  cleaned = cleaned.replace(/^[\-\+\s]+/, '').replace(/\s+$/, '');
+  // Handle various formats
+  // Remove minus sign for processing (we'll use absolute value anyway)
+  cleaned = cleaned.replace(/^-/, '');
   
-  // Handle different decimal formats
-  if (cleaned.includes(',') && cleaned.includes('.')) {
-    // Both comma and dot - determine which is decimal
-    const lastComma = cleaned.lastIndexOf(',');
-    const lastDot = cleaned.lastIndexOf('.');
-    
-    if (lastComma > lastDot) {
-      // Comma is decimal: 1.234,56
-      cleaned = cleaned.replace(/\./g, '').replace(',', '.');
-    } else {
-      // Dot is decimal: 1,234.56
-      cleaned = cleaned.replace(/,/g, '');
-    }
+  // Handle space as thousand separator, comma as decimal
+  if (cleaned.includes(' ') && cleaned.includes(',')) {
+    // Format: 75 000,00
+    cleaned = cleaned.replace(/\s/g, '').replace(',', '.');
   } else if (cleaned.includes(',')) {
-    // Only comma - could be thousand separator or decimal
-    const commaIndex = cleaned.lastIndexOf(',');
-    const afterComma = cleaned.substring(commaIndex + 1);
-    
-    if (afterComma.length <= 2) {
-      // Decimal separator: 274,71
+    // Format: 599,00
       cleaned = cleaned.replace(',', '.');
-    } else {
-      // Thousand separator: 1,234
-      cleaned = cleaned.replace(/,/g, '');
-    }
   } else if (cleaned.includes(' ')) {
-    // Space as thousand separator: 4 349
+    // Format: 75 000 (no decimals)
     cleaned = cleaned.replace(/\s/g, '');
   }
   
@@ -235,47 +451,7 @@ function cleanMerchantName(rawMerchant) {
   return cleaned.toUpperCase();
 }
 
-/**
- * Determine transaction type with international support
- */
-function determineTransactionType(merchant, amount) {
-  const merchantLower = merchant.toLowerCase();
-  
-  // Income keywords (multiple languages)
-  const incomeKeywords = [
-    'salary', 'lønn', 'wage', 'lön', 'gehalt',
-    'deposit', 'innskudd', 'insättning', 'einzahlung',
-    'refund', 'refusjon', 'återbetalning', 'erstattung',
-    'transfer in', 'overføring inn', 'överföring in',
-    'payment received', 'betaling mottatt'
-  ];
-  
-  // Savings keywords
-  const savingsKeywords = [
-    'savings', 'sparing', 'sparande', 'sparen',
-    'investment', 'investering', 'investering', 'investition',
-    'pension', 'pensjon', 'pension', 'rente',
-    'transfer to', 'overføring til', 'överföring till'
-  ];
-  
-  // Check for income
-  if (incomeKeywords.some(keyword => merchantLower.includes(keyword))) {
-    return 'income';
-  }
-  
-  // Check for savings
-  if (savingsKeywords.some(keyword => merchantLower.includes(keyword))) {
-    return 'savings';
-  }
-  
-  // Large amounts (>10000) might be income or savings
-  if (amount > 10000) {
-    return 'income'; // Assume salary/large income
-  }
-  
-  // Default to expense
-  return 'expense';
-}
+// Removed - using simpler determineType function above
 
 /**
  * Remove duplicate transactions
@@ -291,3 +467,4 @@ function removeDuplicates(transactions) {
     return true;
   });
 }
+

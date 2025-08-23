@@ -1,17 +1,13 @@
-import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { parseUniversalBankStatement } from './universalBankParser';
 
 /* ============================================================
-   IMPROVED OCR SERVICE WITH MULTIPLE OPTIONS
-   Real text extraction from bank statement photos
+   GOOGLE VISION OCR SERVICE
+   Real text extraction from bank statement photos using Google Vision API
    ============================================================ */
 
-// Option 1: Google Vision API (requires API key)
+// Google Vision API configuration
 const GOOGLE_VISION_API_KEY = 'AIzaSyCyHtIbSBEuWUXG3wGIVu14GS7KGLtRcTg'; // Replace with your actual API key
-
-// Option 2: Alternative free OCR service
-const OCR_SPACE_API_KEY = 'helloworld'; // Free tier available
 
 /**
  * Preprocess image for better OCR results
@@ -37,45 +33,7 @@ async function preprocessImage(imageUri) {
   }
 }
 
-/**
- * Extract text using OCR.space API (Free tier available)
- * @param {string} imageUri - Local image URI
- * @returns {Promise<Array>} - Array of extracted transactions
- */
-async function extractWithOCRSpace(imageUri) {
-  try {
-    const processedImage = await preprocessImage(imageUri);
-    
-    const formData = new FormData();
-    formData.append('base64Image', `data:image/jpeg;base64,${processedImage.base64}`);
-    formData.append('language', 'eng');
-    formData.append('isOverlayRequired', 'false');
-    formData.append('detectOrientation', 'true');
-    formData.append('scale', 'true');
-    formData.append('OCREngine', '2'); // Use newer engine
-    
-    const response = await fetch('https://api.ocr.space/parse/image', {
-      method: 'POST',
-      headers: {
-        'apikey': OCR_SPACE_API_KEY,
-      },
-      body: formData,
-    });
-    
-    const result = await response.json();
-    
-    if (result.ParsedResults && result.ParsedResults[0] && result.ParsedResults[0].ParsedText) {
-      const extractedText = result.ParsedResults[0].ParsedText;
-      console.log('📄 Extracted text:', extractedText);
-      return parseUniversalBankStatement(extractedText);
-    } else {
-      throw new Error('No text found in image');
-    }
-  } catch (error) {
-    console.error('OCR.space Error:', error);
-    throw error;
-  }
-}
+
 
 /**
  * Extract text from image using Google Vision API
@@ -159,15 +117,14 @@ async function extractWithGoogleVision(imageUri) {
 }
 
 /**
- * Main OCR function - tries multiple services
+ * Extract text from image using Google Vision API
  * @param {string} imageUri - Local image URI
  * @returns {Promise<Array>} - Array of extracted transactions
  */
 export async function extractTextFromImage(imageUri) {
-  console.log('🔍 Starting OCR process with image:', imageUri);
+  console.log('🔍 Starting Google Vision OCR process with image:', imageUri);
   console.log('🔑 API Key check:', GOOGLE_VISION_API_KEY.substring(0, 20) + '...');
   
-  // FORCE Google Vision API usage (most accurate)
   try {
     console.log('📡 Calling Google Vision API...');
     const transactions = await extractWithGoogleVision(imageUri);
@@ -175,260 +132,24 @@ export async function extractTextFromImage(imageUri) {
     return transactions;
   } catch (error) {
     console.log('❌ Google Vision failed:', error.message);
-    console.log('🔍 Full error:', error);
     
-    // Check specific error types
+    // Provide helpful error messages
     if (error.message.includes('API key not configured')) {
-      console.log('💡 API key issue detected');
+      throw new Error('Google Vision API key not configured. Please add your API key to use text extraction.');
     } else if (error.message.includes('403')) {
-      console.log('💡 Permission issue - check if Vision API is enabled');
+      throw new Error('Google Vision API access denied. Please check if the Vision API is enabled in your Google Cloud Console.');
     } else if (error.message.includes('400')) {
-      console.log('💡 Request format issue');
+      throw new Error('Invalid request to Google Vision API. Please check your image format.');
+    } else if (error.message.includes('Network')) {
+      throw new Error('Network error. Please check your internet connection and try again.');
     }
     
-    // Temporary fallback while you enable Vision API
-    console.log('🔄 Falling back to OCR.space while you enable Vision API...');
-    
-    try {
-      const transactions = await extractWithOCRSpace(imageUri);
-      if (transactions.length > 0) {
-        console.log('✅ OCR.space backup successful!');
-        return transactions;
-      }
-    } catch (backupError) {
-      console.log('❌ Backup OCR also failed:', backupError.message);
-    }
-    
-    throw new Error(`All OCR failed. Enable Vision API to fix this.`);
+    throw new Error(`Google Vision API failed: ${error.message}`);
   }
 }
 
-/**
- * Parse transactions from extracted text
- * @param {string} text - Raw text from OCR
- * @returns {Array} - Parsed transactions
- */
-function parseTransactionsFromText(text) {
-  console.log('🔍 Parsing Norwegian bank statement...');
-  console.log('📄 Raw text to parse:', text);
-  
-  const lines = text.split('\n').filter(line => line.trim().length > 0);
-  const transactions = [];
-  
-  console.log(`📝 Processing ${lines.length} lines...`);
-  
-  // Your bank statement format appears to be:
-  // Day Date
-  // MERCHANT NAME, Location...
-  // Category
-  // -Amount
-  
-  for (let i = 0; i < lines.length; i++) {
-    const currentLine = lines[i].trim();
-    
-    console.log(`Line ${i}: "${currentLine}"`);
-    
-    // Look for amount lines (negative numbers)
-    const amountMatch = currentLine.match(/^([\-\+]?\s*\d{1,3}(?:[\s\.,]\d{3})*[,\.]?\d{0,2})$/);
-    
-    if (amountMatch) {
-      const amountStr = amountMatch[1];
-      const amount = parseAmount(amountStr);
-      
-      console.log(`💰 Found amount: ${amountStr} -> ${amount}`);
-      
-      if (amount >= 1) {
-        // Look backwards for merchant name
-        let merchant = '';
-        let category = '';
-        
-        // Check previous lines for merchant info
-        for (let j = i - 1; j >= Math.max(0, i - 4); j--) {
-          const checkLine = lines[j]?.trim();
-          if (!checkLine) continue;
-          
-          console.log(`  Checking line ${j}: "${checkLine}"`);
-          
-          // Skip date lines
-          if (isDateLine(checkLine)) {
-            console.log(`  -> Skipping date line`);
-            continue;
-          }
-          
-          // Skip amount lines
-          if (checkLine.match(/^[\-\+]?\s*\d/)) {
-            console.log(`  -> Skipping amount line`);
-            continue;
-          }
-          
-          // This should be merchant or category
-          if (checkLine.length > 2) {
-            if (!merchant) {
-              // First non-date/amount line is likely the merchant
-              merchant = checkLine;
-              console.log(`  -> Found merchant: "${merchant}"`);
-            } else if (!category && checkLine.length < 30) {
-              // Short line might be category
-              category = checkLine;
-              console.log(`  -> Found category: "${category}"`);
-            }
-          }
-        }
-        
-        if (merchant) {
-          const cleanMerchant = extractMerchantName(merchant);
-          const type = determineTransactionType(cleanMerchant, amount, merchant + ' ' + category);
-          
-          transactions.push({
-            text: `${merchant} ${currentLine}`,
-            merchant: cleanMerchant,
-            amount: amount,
-            type: type,
-            category: category || 'Other',
-            id: Date.now() + Math.random() + i,
-          });
-          
-          console.log(`✅ Transaction: ${cleanMerchant} - ${amount} kr (${type}) [${category}]`);
-        } else {
-          console.log(`❌ No merchant found for amount ${amount}`);
-        }
-      }
-    }
-  }
-  
-  console.log(`🎯 Found ${transactions.length} transactions total`);
-  
-  // Remove duplicates and sort by amount
-  const uniqueTransactions = removeDuplicates(transactions);
-  return uniqueTransactions.sort((a, b) => b.amount - a.amount);
-}
-
-/**
- * Check if line contains a date
- */
-function isDateLine(line) {
-  return /\b(mandag|tirsdag|onsdag|torsdag|fredag|lørdag|søndag|\d{1,2}\.\d{1,2}\.\d{2,4})/i.test(line);
-}
-
-/**
- * Clean up merchant name (Norwegian format)
- */
-function extractMerchantName(rawMerchant) {
-  if (!rawMerchant) return '';
-  
-  console.log(`🏪 Cleaning merchant: "${rawMerchant}"`);
-  
-  let cleaned = rawMerchant
-    .replace(/\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/g, '') // Remove dates
-    .replace(/[\-\+]?\d+[,\.]?\d*/g, '') // Remove amounts
-    .replace(/,\s*[A-Z][a-z]+/g, '') // Remove location after comma (e.g., ", Trondheim")
-    .replace(/\*\s*/g, '') // Remove asterisks
-    .replace(/\.\.\./g, '') // Remove ellipsis
-    .replace(/[^\w\sæøåÆØÅ]/g, ' ') // Keep Norwegian characters
-    .replace(/\s+/g, ' ') // Normalize spaces
-    .trim();
-  
-  // Take first part if very long (remove location/description)
-  if (cleaned.length > 25) {
-    const parts = cleaned.split(/\s+/);
-    cleaned = parts.slice(0, 3).join(' '); // Take first 3 words
-  }
-  
-  const result = cleaned.toUpperCase();
-  console.log(`🏪 Result: "${result}"`);
-  
-  return result;
-}
-
-/**
- * Parse amount from string (handles Norwegian formats)
- */
-function parseAmount(amountStr) {
-  if (!amountStr) return 0;
-  
-  console.log(`🔢 Parsing amount: "${amountStr}"`);
-  
-  let cleaned = String(amountStr).trim();
-  
-  // Remove currency symbols and extra text
-  cleaned = cleaned.replace(/kr|nok|øre/gi, '').trim();
-  
-  // Handle Norwegian formats specifically:
-  // -274,71 -> 274.71
-  // -4 349.00 -> 4349.00
-  // -111,00 -> 111.00
-  
-  // Remove leading/trailing spaces and signs
-  const isNegative = cleaned.startsWith('-') || cleaned.startsWith('+');
-  cleaned = cleaned.replace(/^[\-\+\s]+/, '').replace(/\s+$/, '');
-  
-  console.log(`🧹 Cleaned: "${cleaned}"`);
-  
-  // Check if it has comma as decimal separator (Norwegian style)
-  if (cleaned.includes(',') && !cleaned.includes('.')) {
-    // Format: 274,71 or 4 349,00
-    cleaned = cleaned.replace(/\s/g, '').replace(',', '.');
-  } 
-  // Check if it has space as thousand separator
-  else if (cleaned.includes(' ')) {
-    // Format: 4 349.00 or 4 349,00
-    const parts = cleaned.split(/[,\.]/);
-    if (parts.length === 2 && parts[1].length <= 2) {
-      // Has decimal part
-      cleaned = cleaned.replace(/\s/g, '').replace(',', '.');
-    } else {
-      // No decimal, just remove spaces
-      cleaned = cleaned.replace(/\s/g, '');
-    }
-  }
-  
-  console.log(`🔧 Final cleaned: "${cleaned}"`);
-  
-  const num = parseFloat(cleaned);
-  const result = isNaN(num) ? 0 : Math.abs(num);
-  
-  console.log(`➡️ Result: ${result}`);
-  
-  return result;
-}
-
-/**
- * Determine if transaction is income, expense, or savings
- */
-function determineTransactionType(merchant, amount, fullText) {
-  const merchantLower = merchant.toLowerCase();
-  const textLower = fullText.toLowerCase();
-  
-  // Income indicators
-  const incomeKeywords = ['salary', 'wage', 'deposit', 'refund', 'transfer in', 'payment received'];
-  if (incomeKeywords.some(keyword => textLower.includes(keyword))) {
-    return 'income';
-  }
-  
-  // Savings indicators
-  const savingsKeywords = ['savings', 'investment', 'pension', 'transfer to'];
-  if (savingsKeywords.some(keyword => textLower.includes(keyword))) {
-    return 'savings';
-  }
-  
-  // Default to expense
-  return 'expense';
-}
-
-/**
- * Remove duplicate transactions
- */
-function removeDuplicates(transactions) {
-  const seen = new Set();
-  return transactions.filter(transaction => {
-    const key = `${transaction.merchant}-${transaction.amount}`;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
+// Note: Transaction parsing is handled by the universalBankParser module
+// which provides more robust parsing for various bank statement formats
 
 /* ============================================================
    FALLBACK OCR SERVICE (for testing without API key)
@@ -494,7 +215,7 @@ export function mockOCRService(imageUri) {
    ============================================================ */
 
 /*
-TO USE REAL OCR:
+SETUP GOOGLE VISION API:
 
 1. Get Google Vision API key:
    - Go to https://console.cloud.google.com/
@@ -503,11 +224,7 @@ TO USE REAL OCR:
    - Create credentials (API key)
    - Replace GOOGLE_VISION_API_KEY above
 
-2. Update TrackingScreen.js:
-   - Replace: mockOCRService(imageUri)
-   - With: extractTextFromImage(imageUri)
-
-3. Test with real bank statements:
+2. Test with real bank statements:
    - Take clear, well-lit photos
    - Ensure text is readable
    - The service will extract actual transaction data
@@ -516,4 +233,10 @@ SECURITY NOTE:
 - Store API key in environment variables in production
 - Consider using Firebase Functions for server-side OCR
 - Never commit API keys to version control
+
+FEATURES:
+- Automatic text extraction from bank statement photos
+- Smart transaction parsing for Norwegian bank formats
+- Merchant name cleaning and categorization
+- Amount parsing with Norwegian number formats
 */
